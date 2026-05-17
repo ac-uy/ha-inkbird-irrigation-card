@@ -1,6 +1,6 @@
 {
   "name": "ha-inkbird-irrigation-card",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "Custom Home Assistant Lovelace card for managing the Inkbird IIC-600 irrigation controller",
   "type": "module",
   "main": "dist/ha-inkbird-irrigation-card.js",

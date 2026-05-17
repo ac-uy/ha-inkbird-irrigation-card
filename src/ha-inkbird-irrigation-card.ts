@@ -155,6 +155,11 @@ export class HaInkbirdIrrigationCard extends LitElement {
     await this._refreshEntity();
   }
 
+  private async _toggleSwitch(entityId: string) {
+    const isOn = this._hass?.states[entityId]?.state === "on";
+    await this._hass?.callService("switch", isOn ? "turn_off" : "turn_on", { entity_id: entityId });
+  }
+
   private async _setDuration(zone: number, value: number) {
     await this._hass?.callService("number", "set_value", {
       entity_id: `number.${this._prefix}_zone_${zone}_duration`,
@@ -187,9 +192,33 @@ export class HaInkbirdIrrigationCard extends LitElement {
           </div>
         </div>
         <div class="card-content">
+          ${this._renderSwitches()}
           ${this._zones.map(zone => this._renderZone(zone))}
         </div>
       </ha-card>
+    `;
+  }
+
+  private _renderSwitches() {
+    const mainValve = this._mainValve;
+    const rainSensor = this._rainSensor;
+    const skipSchedule = this._skipSchedule;
+
+    return html`
+      <div class="switches-row">
+        <button class="sw-btn ${mainValve ? 'sw-btn--on' : ''}" @click=${() => this._toggleSwitch(`switch.${this._prefix}_main_valve`)}>
+          <ha-icon icon="mdi:valve"></ha-icon>
+          <span>Valve</span>
+        </button>
+        <button class="sw-btn ${rainSensor ? 'sw-btn--on' : ''}" @click=${() => this._toggleSwitch(`switch.${this._prefix}_rain_sensor`)}>
+          <ha-icon icon="mdi:weather-rainy"></ha-icon>
+          <span>Rain</span>
+        </button>
+        <button class="sw-btn ${skipSchedule ? 'sw-btn--warn' : ''}" @click=${() => this._toggleSwitch(`switch.${this._prefix}_skip_schedule`)}>
+          <ha-icon icon="mdi:calendar-remove"></ha-icon>
+          <span>Skip</span>
+        </button>
+      </div>
     `;
   }
 
@@ -300,6 +329,40 @@ export class HaInkbirdIrrigationCard extends LitElement {
 
     /* Content */
     .card-content { padding: 8px 16px 16px; display: flex; flex-direction: column; gap: 6px; }
+
+    /* System switches */
+    .switches-row {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 8px;
+    }
+    .sw-btn {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+      padding: 10px 8px;
+      border: 1px solid var(--divider-color, #e0e0e0);
+      border-radius: 10px;
+      background: transparent;
+      cursor: pointer;
+      color: var(--secondary-text-color);
+      font-size: 11px;
+      font-weight: 500;
+      --mdc-icon-size: 20px;
+      transition: all 200ms;
+    }
+    .sw-btn--on {
+      background: rgba(76, 175, 80, 0.1);
+      border-color: var(--primary-color, #4CAF50);
+      color: var(--primary-color, #4CAF50);
+    }
+    .sw-btn--warn {
+      background: rgba(255, 152, 0, 0.1);
+      border-color: var(--warning-color, #FF9800);
+      color: var(--warning-color, #FF9800);
+    }
 
     /* Zone */
     .zone {
