@@ -39,6 +39,7 @@ const ZONE_COLORS = [
 @customElement("ha-inkbird-irrigation-card")
 export class HaInkbirdIrrigationCard extends LitElement {
   @state() private _config!: CardConfig;
+  @state() private _loading: Set<string> = new Set();
   private _hass?: HomeAssistant;
 
   static getConfigElement() {
@@ -126,7 +127,6 @@ export class HaInkbirdIrrigationCard extends LitElement {
 
   private async _refreshEntity() {
     await new Promise(r => setTimeout(r, 500));
-    // Refresh all zone switches to get updated state
     for (const zone of this._zones) {
       await this._hass?.callService("homeassistant", "update_entity", {
         entity_id: `switch.${this._prefix}_zone_${zone}`,
@@ -135,40 +135,62 @@ export class HaInkbirdIrrigationCard extends LitElement {
   }
 
   private async _toggleZone(zone: number) {
-    const isOn = this._zoneIsActive(zone);
-    const entityId = `switch.${this._prefix}_zone_${zone}`;
-    await this._hass?.callService("switch", isOn ? "turn_off" : "turn_on", { entity_id: entityId });
-    await this._refreshEntity();
+    const key = `zone_${zone}`;
+    this._loading = new Set([...this._loading, key]);
+    try {
+      const isOn = this._zoneIsActive(zone);
+      const entityId = `switch.${this._prefix}_zone_${zone}`;
+      await this._hass?.callService("switch", isOn ? "turn_off" : "turn_on", { entity_id: entityId });
+      await this._refreshEntity();
+    } finally {
+      this._loading = new Set([...this._loading].filter(k => k !== key));
+    }
   }
 
   private async _startZone(zone: number, duration: number) {
-    await this._hass?.callService("number", "set_value", {
-      entity_id: `number.${this._prefix}_zone_${zone}_duration`,
-      value: duration,
-    });
-    await this._hass?.callService("switch", "turn_on", {
-      entity_id: `switch.${this._prefix}_zone_${zone}`,
-    });
-    await this._refreshEntity();
+    const key = `zone_${zone}`;
+    this._loading = new Set([...this._loading, key]);
+    try {
+      await this._hass?.callService("number", "set_value", {
+        entity_id: `number.${this._prefix}_zone_${zone}_duration`,
+        value: duration,
+      });
+      await this._hass?.callService("switch", "turn_on", {
+        entity_id: `switch.${this._prefix}_zone_${zone}`,
+      });
+      await this._refreshEntity();
+    } finally {
+      this._loading = new Set([...this._loading].filter(k => k !== key));
+    }
   }
 
   private async _stopAll() {
-    for (const zone of this._zones) {
-      if (this._zoneIsActive(zone)) {
-        await this._hass?.callService("switch", "turn_off", {
-          entity_id: `switch.${this._prefix}_zone_${zone}`,
-        });
+    this._loading = new Set([...this._loading, "stop_all"]);
+    try {
+      for (const zone of this._zones) {
+        if (this._zoneIsActive(zone)) {
+          await this._hass?.callService("switch", "turn_off", {
+            entity_id: `switch.${this._prefix}_zone_${zone}`,
+          });
+        }
       }
+      await this._refreshEntity();
+    } finally {
+      this._loading = new Set([...this._loading].filter(k => k !== "stop_all"));
     }
-    await this._refreshEntity();
   }
 
   private async _toggleSwitch(entityId: string) {
-    const isOn = this._hass?.states[entityId]?.state === "on";
-    await this._hass?.callService("switch", isOn ? "turn_off" : "turn_on", { entity_id: entityId });
-    // Force refresh after a short delay
-    await new Promise(r => setTimeout(r, 500));
-    await this._hass?.callService("homeassistant", "update_entity", { entity_id: entityId });
+    const key = `sw_${entityId}`;
+    this._loading = new Set([...this._loading, key]);
+    try {
+      const isOn = this._hass?.states[entityId]?.state === "on";
+      await this._hass?.callService("switch", isOn ? "turn_off" : "turn_on", { entity_id: entityId });
+      await new Promise(r => setTimeout(r, 500));
+      await this._hass?.callService("homeassistant", "update_entity", { entity_id: entityId });
+    } finally {
+      this._loading = new Set([...this._loading].filter(k => k !== key));
+    }
   }
 
   private async _setDuration(zone: number, value: number) {
@@ -217,16 +239,16 @@ export class HaInkbirdIrrigationCard extends LitElement {
 
     return html`
       <div class="switches-row">
-        <button class="sw-btn ${mainValve ? 'sw-btn--on' : ''}" @click=${() => this._toggleSwitch(`switch.${this._prefix}_main_valve`)}>
-          <ha-icon icon="mdi:valve"></ha-icon>
+        <button class="sw-btn ${mainValve ? 'sw-btn--on' : ''} ${this._loading.has(`sw_switch.${this._prefix}_main_valve`) ? 'sw-btn--loading' : ''}" @click=${() => this._toggleSwitch(`switch.${this._prefix}_main_valve`)}>
+          ${this._loading.has(`sw_switch.${this._prefix}_main_valve`) ? html`<ha-icon icon="mdi:loading" class="spin"></ha-icon>` : html`<ha-icon icon="mdi:valve"></ha-icon>`}
           <span>Valve</span>
         </button>
-        <button class="sw-btn ${rainSensor ? 'sw-btn--on' : ''}" @click=${() => this._toggleSwitch(`switch.${this._prefix}_rain_sensor`)}>
-          <ha-icon icon="mdi:weather-rainy"></ha-icon>
+        <button class="sw-btn ${rainSensor ? 'sw-btn--on' : ''} ${this._loading.has(`sw_switch.${this._prefix}_rain_sensor`) ? 'sw-btn--loading' : ''}" @click=${() => this._toggleSwitch(`switch.${this._prefix}_rain_sensor`)}>
+          ${this._loading.has(`sw_switch.${this._prefix}_rain_sensor`) ? html`<ha-icon icon="mdi:loading" class="spin"></ha-icon>` : html`<ha-icon icon="mdi:weather-rainy"></ha-icon>`}
           <span>Rain</span>
         </button>
-        <button class="sw-btn ${skipSchedule ? 'sw-btn--warn' : ''}" @click=${() => this._toggleSwitch(`switch.${this._prefix}_skip_schedule`)}>
-          <ha-icon icon="mdi:calendar-remove"></ha-icon>
+        <button class="sw-btn ${skipSchedule ? 'sw-btn--warn' : ''} ${this._loading.has(`sw_switch.${this._prefix}_skip_schedule`) ? 'sw-btn--loading' : ''}" @click=${() => this._toggleSwitch(`switch.${this._prefix}_skip_schedule`)}>
+          ${this._loading.has(`sw_switch.${this._prefix}_skip_schedule`) ? html`<ha-icon icon="mdi:loading" class="spin"></ha-icon>` : html`<ha-icon icon="mdi:calendar-remove"></ha-icon>`}
           <span>Skip</span>
         </button>
       </div>
@@ -253,7 +275,7 @@ export class HaInkbirdIrrigationCard extends LitElement {
           </div>
           ${isActive ? html`
             <button class="zone-btn zone-btn--active" @click=${() => this._toggleZone(zone)}>
-              <ha-icon icon="mdi:stop"></ha-icon>
+              ${this._loading.has(`zone_${zone}`) ? html`<ha-icon icon="mdi:loading" class="spin"></ha-icon>` : html`<ha-icon icon="mdi:stop"></ha-icon>`}
             </button>
           ` : html`
             <div class="zone-controls">
@@ -262,8 +284,8 @@ export class HaInkbirdIrrigationCard extends LitElement {
                   <option value="${d}" ?selected=${duration === d}>${d} min</option>
                 `)}
               </select>
-              <button class="zone-start-btn" @click=${() => this._startZone(zone, duration)}>
-                <ha-icon icon="mdi:water"></ha-icon>
+              <button class="zone-start-btn" @click=${() => this._startZone(zone, duration)} ?disabled=${this._loading.has(`zone_${zone}`)}>
+                ${this._loading.has(`zone_${zone}`) ? html`<ha-icon icon="mdi:loading" class="spin"></ha-icon>` : html`<ha-icon icon="mdi:water"></ha-icon>`}
               </button>
             </div>
           `}
@@ -374,6 +396,9 @@ export class HaInkbirdIrrigationCard extends LitElement {
       border-color: var(--warning-color, #FF9800);
       color: var(--warning-color, #FF9800);
     }
+    .sw-btn--loading { opacity: 0.6; pointer-events: none; }
+    .spin { animation: spin 1s linear infinite; }
+    @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 
     /* Zone */
     .zone {
