@@ -28,6 +28,7 @@ export class HaInkbirdIrrigationCard extends LitElement {
   @state() private _config!: CardConfig;
   @state() private _loading: Set<string> = new Set();
   @state() private _addingSchedule = false;
+  @state() private _editingScheduleId: string | null = null;
   @state() private _newZone = 1;
   @state() private _newTime = "07:00";
   @state() private _newDuration = 30;
@@ -104,6 +105,13 @@ export class HaInkbirdIrrigationCard extends LitElement {
     if (selectedDays.length === 0) return;
     this._saving = true;
     try {
+      // If editing, delete the old one first
+      if (this._editingScheduleId) {
+        const configId = this._hass?.states[this._editingScheduleId]?.attributes?.id;
+        if (configId) {
+          await (this._hass as any).callApi("DELETE", `config/automation/config/${configId}`);
+        }
+      }
       const daysLabel = DAY_NAMES.filter((_, i) => this._newDays[i]).join(",");
       const id = `irr_zone_${this._newZone}_${this._newTime.replace(":", "")}_${Date.now()}`;
       const alias = `Irr: Zone ${this._newZone} @ ${this._newTime} (${this._newDuration}min) ${daysLabel}`;
@@ -122,6 +130,7 @@ export class HaInkbirdIrrigationCard extends LitElement {
       };
       await (this._hass as any).callApi("POST", `config/automation/config/${id}`, config);
       this._addingSchedule = false;
+      this._editingScheduleId = null;
       await this._hass?.callService("automation", "reload", {});
     } catch (e: any) {
       console.error("Failed to create schedule:", e);
@@ -138,6 +147,24 @@ export class HaInkbirdIrrigationCard extends LitElement {
     } catch (e: any) {
       console.error("Failed to delete schedule:", e);
     }
+  }
+
+  private _duplicateSchedule(schedule: any) {
+    this._newZone = schedule.zone;
+    this._newTime = schedule.time;
+    this._newDuration = schedule.duration;
+    this._newDays = DAY_NAMES.map(d => schedule.days.includes(d));
+    this._editingScheduleId = null;
+    this._addingSchedule = true;
+  }
+
+  private _editSchedule(schedule: any) {
+    this._newZone = schedule.zone;
+    this._newTime = schedule.time;
+    this._newDuration = schedule.duration;
+    this._newDays = DAY_NAMES.map(d => schedule.days.includes(d));
+    this._editingScheduleId = schedule.entity_id;
+    this._addingSchedule = true;
   }
 
   // ── Render ──
@@ -193,7 +220,7 @@ export class HaInkbirdIrrigationCard extends LitElement {
       <div class="schedule-section">
         <div class="schedule-header">
           <span class="schedule-title"><ha-icon icon="mdi:calendar-clock"></ha-icon> Schedules</span>
-          <button class="add-btn" @click=${() => { this._addingSchedule = !this._addingSchedule; }}>${this._addingSchedule ? "Cancel" : "+ Add"}</button>
+          <button class="add-btn" @click=${() => { this._addingSchedule = !this._addingSchedule; this._editingScheduleId = null; }}>${this._addingSchedule ? "Cancel" : "+ Add"}</button>
         </div>
         ${this._addingSchedule ? this._renderAddForm() : nothing}
         ${schedules.length === 0 && !this._addingSchedule ? html`<div class="empty-schedule">No schedules. Tap + Add to create one.</div>` : nothing}
@@ -201,6 +228,8 @@ export class HaInkbirdIrrigationCard extends LitElement {
           <div class="sched-entry">
             <button class="sched-toggle ${s.enabled ? 'on' : ''}" @click=${() => this._toggleSchedule(s.entity_id)}><ha-icon icon="mdi:${s.enabled ? 'check-circle' : 'circle-outline'}"></ha-icon></button>
             <div class="sched-info"><span class="sched-zone" style="color: ${this._zoneColor(s.zone)}">${this._zoneName(s.zone)}</span><span class="sched-detail">${s.time} · ${s.duration}min · ${s.days}</span></div>
+            <button class="sched-action" @click=${() => this._editSchedule(s)}><ha-icon icon="mdi:pencil"></ha-icon></button>
+            <button class="sched-action" @click=${() => this._duplicateSchedule(s)}><ha-icon icon="mdi:content-copy"></ha-icon></button>
             <button class="sched-remove" @click=${() => this._removeSchedule(s.entity_id)}><ha-icon icon="mdi:delete"></ha-icon></button>
           </div>
         `)}
@@ -214,7 +243,7 @@ export class HaInkbirdIrrigationCard extends LitElement {
         <div class="form-row"><label>Time</label><input type="time" .value=${this._newTime} @change=${(e: Event) => { this._newTime = (e.target as HTMLInputElement).value; }} /></div>
         <div class="form-row"><label>Duration</label><select @change=${(e: Event) => { this._newDuration = parseInt((e.target as HTMLSelectElement).value); }}>${[5,10,15,20,30,45,60,90,120].map(d => html`<option value="${d}" ?selected=${this._newDuration === d}>${d} min</option>`)}</select></div>
         <div class="form-row"><label>Days</label><div class="day-picker">${DAY_NAMES.map((d, i) => html`<button class="day-btn ${this._newDays[i] ? 'day-btn--on' : ''}" @click=${() => { this._newDays = [...this._newDays]; this._newDays[i] = !this._newDays[i]; this.requestUpdate(); }}>${d.slice(0,2)}</button>`)}</div></div>
-        <button class="save-btn" @click=${this._addSchedule} ?disabled=${this._saving}>${this._saving ? "Creating..." : "Create Schedule"}</button>
+        <button class="save-btn" @click=${this._addSchedule} ?disabled=${this._saving}>${this._saving ? "Saving..." : this._editingScheduleId ? "Save Changes" : "Create Schedule"}</button>
       </div>`;
   }
 
@@ -270,6 +299,7 @@ export class HaInkbirdIrrigationCard extends LitElement {
     .sched-zone { font-size: 13px; font-weight: 500; }
     .sched-detail { font-size: 11px; color: var(--secondary-text-color); }
     .sched-remove { border: none; background: transparent; cursor: pointer; color: var(--error-color, #f44336); --mdc-icon-size: 18px; padding: 4px; }
+    .sched-action { border: none; background: transparent; cursor: pointer; color: var(--secondary-text-color); --mdc-icon-size: 16px; padding: 4px; }
     /* Add form */
     .add-form { padding: 12px; border-radius: 8px; background: var(--primary-background-color, #f5f5f5); margin-bottom: 8px; }
     .form-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
