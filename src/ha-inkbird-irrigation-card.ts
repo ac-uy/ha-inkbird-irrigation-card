@@ -17,7 +17,7 @@ interface HomeAssistant {
   callWS(msg: Record<string, any>): Promise<any>;
   themes: { darkMode: boolean };
 }
-interface CardConfig { type: string; entity_prefix?: string; title?: string; zones?: number[]; zone_names?: Record<number, string>; num_zones?: number; zones_columns?: number; }
+interface CardConfig { type: string; entity_prefix?: string; title?: string; zones?: number[]; zone_names?: Record<number, string>; zone_entities?: Record<number, string>; num_zones?: number; zones_columns?: number; }
 
 const ZONE_COLORS = ["#4CAF50", "#2196F3", "#FF9800", "#9C27B0", "#00BCD4", "#F44336"];
 const DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -44,13 +44,26 @@ export class HaInkbirdIrrigationCard extends LitElement {
   getCardSize() { return 6; }
 
   private get _prefix(): string { return this._config.entity_prefix || "inkbird_iic_600"; }
-  private get _zones(): number[] { return this._config.zones || Array.from({length: this._config.num_zones || 6}, (_, i) => i + 1); }
+  // Default zone count is model-aware when num_zones isn't set explicitly:
+  // IIC-800 → 8 zones, IIC-400 → 4 zones, otherwise 6.
+  private get _defaultNumZones(): number {
+    const p = this._prefix;
+    if (p.includes("iic_800")) return 8;
+    if (p.includes("iic_400")) return 4;
+    return 6;
+  }
+  private get _zones(): number[] { return this._config.zones || Array.from({length: this._config.num_zones || this._defaultNumZones}, (_, i) => i + 1); }
+  // Resolve the switch entity for a zone, honoring an explicit per-zone override
+  // from the editor before falling back to the prefix-derived entity id.
+  private _zoneSwitchEntity(zone: number): string { return this._config.zone_entities?.[zone] || `switch.${this._prefix}_zone_${zone}`; }
   private _zoneName(zone: number): string { return this._config.zone_names?.[zone] || `Zone ${zone}`; }
   private _zoneColor(zone: number): string { return ZONE_COLORS[this._zones.indexOf(zone) % ZONE_COLORS.length]; }
-  private _zoneIsActive(zone: number): boolean { return this._hass?.states[`switch.${this._prefix}_zone_${zone}`]?.state === "on"; }
+  private _zoneIsActive(zone: number): boolean { return this._hass?.states[this._zoneSwitchEntity(zone)]?.state === "on"; }
   private _zoneRemaining(zone: number): number { const e = this._hass?.states[`sensor.${this._prefix}_zone_${zone}_time_remaining`]; return e ? parseInt(e.state) || 0 : 0; }
   private _zoneElapsed(zone: number): number { const e = this._hass?.states[`sensor.${this._prefix}_zone_${zone}_time_elapsed`]; return e ? parseInt(e.state) || 0 : 0; }
   private _zoneDuration(zone: number): number { const e = this._hass?.states[`number.${this._prefix}_zone_${zone}_duration`]; return e ? parseInt(e.state) || 30 : 30; }
+  // True when the expected zone switch entity is unknown to HA (wrong prefix / not loaded).
+  private _zoneEntityMissing(zone: number): boolean { return !!this._hass && !this._hass.states[this._zoneSwitchEntity(zone)]; }
   private get _mainValve(): boolean { return this._hass?.states[`switch.${this._prefix}_main_valve`]?.state === "on"; }
   private get _rainSensor(): boolean { return this._hass?.states[`switch.${this._prefix}_rain_sensor`]?.state === "on"; }
   private get _skipSchedule(): boolean { return this._hass?.states[`switch.${this._prefix}_skip_schedule`]?.state === "on"; }
@@ -103,21 +116,21 @@ export class HaInkbirdIrrigationCard extends LitElement {
   // ── Actions ──
   private async _refreshEntity() {
     await new Promise(r => setTimeout(r, 500));
-    for (const z of this._zones) await this._hass?.callService("homeassistant", "update_entity", { entity_id: `switch.${this._prefix}_zone_${z}` });
+    for (const z of this._zones) await this._hass?.callService("homeassistant", "update_entity", { entity_id: this._zoneSwitchEntity(z) });
   }
   private async _toggleZone(zone: number) {
     const key = `zone_${zone}`; this._loading = new Set([...this._loading, key]);
-    try { await this._hass?.callService("switch", this._zoneIsActive(zone) ? "turn_off" : "turn_on", { entity_id: `switch.${this._prefix}_zone_${zone}` }); await this._refreshEntity(); }
+    try { await this._hass?.callService("switch", this._zoneIsActive(zone) ? "turn_off" : "turn_on", { entity_id: this._zoneSwitchEntity(zone) }); await this._refreshEntity(); }
     finally { this._loading = new Set([...this._loading].filter(k => k !== key)); }
   }
   private async _startZone(zone: number, duration: number) {
     const key = `zone_${zone}`; this._loading = new Set([...this._loading, key]);
-    try { await this._hass?.callService("number", "set_value", { entity_id: `number.${this._prefix}_zone_${zone}_duration`, value: duration }); await this._hass?.callService("switch", "turn_on", { entity_id: `switch.${this._prefix}_zone_${zone}` }); await this._refreshEntity(); }
+    try { await this._hass?.callService("number", "set_value", { entity_id: `number.${this._prefix}_zone_${zone}_duration`, value: duration }); await this._hass?.callService("switch", "turn_on", { entity_id: this._zoneSwitchEntity(zone) }); await this._refreshEntity(); }
     finally { this._loading = new Set([...this._loading].filter(k => k !== key)); }
   }
   private async _stopAll() {
     this._loading = new Set([...this._loading, "stop_all"]);
-    try { for (const z of this._zones) if (this._zoneIsActive(z)) await this._hass?.callService("switch", "turn_off", { entity_id: `switch.${this._prefix}_zone_${z}` }); await this._refreshEntity(); }
+    try { for (const z of this._zones) if (this._zoneIsActive(z)) await this._hass?.callService("switch", "turn_off", { entity_id: this._zoneSwitchEntity(z) }); await this._refreshEntity(); }
     finally { this._loading = new Set([...this._loading].filter(k => k !== "stop_all")); }
   }
   private async _toggleSwitch(entityId: string) {
@@ -298,6 +311,19 @@ export class HaInkbirdIrrigationCard extends LitElement {
     const elapsed = this._zoneElapsed(zone); const duration = this._zoneDuration(zone);
     const progress = isActive && (elapsed + remaining) > 0 ? (elapsed / (elapsed + remaining)) * 100 : 0;
     const color = this._zoneColor(zone);
+    const missing = this._zoneEntityMissing(zone);
+    if (missing) {
+      return html`
+        <div class="zone zone--missing" style="--zone-color: ${color}">
+          <div class="zone-main">
+            <div class="zone-indicator"></div>
+            <div class="zone-info">
+              <span class="zone-name">${this._zoneName(zone)}</span>
+              <span class="zone-warning"><ha-icon icon="mdi:alert-circle-outline"></ha-icon> entity not found: check entity_prefix (${this._zoneSwitchEntity(zone)})</span>
+            </div>
+          </div>
+        </div>`;
+    }
     return html`
       <div class="zone ${isActive ? 'zone--active' : ''}" style="--zone-color: ${color}">
         <div class="zone-main">
@@ -394,6 +420,8 @@ export class HaInkbirdIrrigationCard extends LitElement {
     .zone-btn--active { background: var(--zone-color); color: white; }
     .zone-progress { height: 3px; background: rgba(0, 0, 0, 0.06); }
     .zone-progress-fill { height: 100%; background: var(--zone-color); transition: width 2s linear; }
+    .zone--missing { background: rgba(244, 67, 54, 0.08); box-shadow: inset 3px 0 0 var(--error-color, #f44336); }
+    .zone-warning { font-size: 11px; color: var(--error-color, #f44336); display: flex; align-items: center; gap: 4px; --mdc-icon-size: 14px; }
 
     /* Schedule section */
     .schedule-section { margin-top: 12px; border-top: 1px solid var(--divider-color, #e0e0e0); padding-top: 12px; }
@@ -434,7 +462,13 @@ export class HaInkbirdIrrigationCardEditor extends LitElement {
   private _hass?: HomeAssistant;
   set hass(hass: HomeAssistant) { this._hass = hass; }
   setConfig(config: any) { this._config = config; }
-  private get _numZones(): number { return this._config.num_zones || 6; }
+  private get _numZones(): number {
+    if (this._config.num_zones) return this._config.num_zones;
+    const p = this._config.entity_prefix || "";
+    if (p.includes("iic_800")) return 8;
+    if (p.includes("iic_400")) return 4;
+    return 6;
+  }
   render() {
     const baseSchema = [
       { name: "title", selector: { text: {} }, label: "Card Title" },
@@ -453,12 +487,30 @@ export class HaInkbirdIrrigationCardEditor extends LitElement {
       <ha-form .hass=${this._hass} .data=${this._config} .schema=${zoneSchemas} .computeLabel=${(s: any) => s.label || s.name} @value-changed=${this._handleChanged}></ha-form>`;
   }
   private _handleChanged(ev: CustomEvent) {
+    // Preserve all existing top-level config fields (title, entity_prefix, etc.)
+    // and merge only the fields that actually changed in whichever sub-form fired.
     const config = { ...this._config, ...ev.detail.value };
-    const zones: number[] = []; const zoneNames: Record<number, string> = {};
-    const n = config.num_zones || 6;
-    for (let i = 1; i <= n; i++) { zones.push(i); if (config[`zone_${i}_name`]) zoneNames[i] = config[`zone_${i}_name`]; }
-    config.zones = zones; if (Object.keys(zoneNames).length) config.zone_names = zoneNames;
-    if (config.entity_prefix) { for (let i = 1; i <= n; i++) { if (!config[`zone_${i}_entity`]) config[`zone_${i}_entity`] = `switch.${config.entity_prefix}_zone_${i}`; } }
+
+    // Rebuild zone data purely from the zone sub-form fields. Do not regenerate or
+    // overwrite any other top-level keys. Derive the model-aware default from the
+    // merged config so changing the prefix updates the zone count immediately.
+    const prefix = config.entity_prefix || "";
+    const modelDefault = prefix.includes("iic_800") ? 8 : prefix.includes("iic_400") ? 4 : 6;
+    const n = config.num_zones || modelDefault;
+    const zones: number[] = [];
+    const zoneNames: Record<number, string> = {};
+    const zoneEntities: Record<number, string> = {};
+    for (let i = 1; i <= n; i++) {
+      zones.push(i);
+      if (config[`zone_${i}_name`]) zoneNames[i] = config[`zone_${i}_name`];
+      // Only honor an explicit, user-selected zone entity. Never synthesize one
+      // from a (possibly partial) entity_prefix.
+      if (config[`zone_${i}_entity`]) zoneEntities[i] = config[`zone_${i}_entity`];
+    }
+    config.zones = zones;
+    if (Object.keys(zoneNames).length) config.zone_names = zoneNames;
+    if (Object.keys(zoneEntities).length) config.zone_entities = zoneEntities;
+
     this._config = config;
     this.dispatchEvent(new CustomEvent("config-changed", { detail: { config } }));
   }
