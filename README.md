@@ -53,6 +53,13 @@ zones: [5, 6]            # optional - show only specific zones (default: all 6)
 | `title` | string | ❌ | Card title (default: "Irrigation") |
 | `zones` | number[] | ❌ | Which zones to show (default: all 6) |
 
+### Multiple controllers
+
+If you run more than one Inkbird controller (e.g. an IIC-600 and an IIC-800),
+give each card its own `entity_prefix`. Schedules created from a card are
+scoped to that card's prefix, so a schedule set on one controller no longer
+appears on the other.
+
 ## Development
 
 ```bash
