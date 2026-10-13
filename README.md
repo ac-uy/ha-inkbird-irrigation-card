@@ -53,6 +53,22 @@ zones: [5, 6]            # optional - show only specific zones (default: all 6)
 | `title` | string | ❌ | Card title (default: "Irrigation") |
 | `zones` | number[] | ❌ | Which zones to show (default: all 6) |
 
+### Setting the title
+
+The card header text comes from the card's own `title` option (shown in the
+visual editor as **Card Title**), and defaults to "Irrigation" when unset.
+
+Note this is **not** the same as a Section heading. On a Sections dashboard,
+the "Edit section" title is stored by Home Assistant as a separate `heading`
+card — it does not change this card's header. To rename the card header, set
+`title` **inside the card config**:
+
+```yaml
+type: custom:ha-inkbird-irrigation-card
+entity_prefix: inkbird_iic_600
+title: Garden (IIC-600)
+```
+
 ### Multiple controllers
 
 If you run more than one Inkbird controller (e.g. an IIC-600 and an IIC-800),
